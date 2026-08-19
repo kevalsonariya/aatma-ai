@@ -1,0 +1,14 @@
+# Agnikavach Backend — Python Dependencies
+
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+
+# HTTP client (used by OllamaClient)
+httpx==0.28.1
+
+# Settings management
+pydantic-settings==2.7.0
+
+# Environment variable loading
+python-dotenv==1.0.1
