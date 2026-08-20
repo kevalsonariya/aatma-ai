@@ -8,7 +8,7 @@ export function SystemInfo() {
     <div className="system-info" aria-label="System information">
       <div className="sys-row">
         <span className="sys-label">Model</span>
-        <span className="sys-value">Qwen3 4B</span>
+        <span className="sys-value">Qwen3 8B</span>
       </div>
       <div className="sys-row">
         <span className="sys-label">Inference</span>

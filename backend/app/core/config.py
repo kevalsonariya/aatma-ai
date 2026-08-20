@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     """Base URL of the locally running Ollama server."""
 
-    MODEL_NAME: str = "qwen3:4b"
+    MODEL_NAME: str = "qwen3:8b"
     """Ollama model tag to use for inference."""
 
     # ── Server ────────────────────────────────────────────────────────────────
