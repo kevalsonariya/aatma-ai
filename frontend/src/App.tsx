@@ -136,7 +136,7 @@ export default function App() {
             <footer className="input-area">
               <ChatInput onSend={sendMessage} disabled={isLoading} />
               <p className="input-disclaimer">
-                Inference runs locally via Ollama · Qwen3 4B · No data leaves your device
+                Inference runs locally via Ollama · Qwen3 8B · No data leaves your device
               </p>
             </footer>
           </>

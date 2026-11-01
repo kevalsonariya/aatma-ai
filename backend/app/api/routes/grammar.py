@@ -10,6 +10,7 @@ All inference is 100% local — no cloud API is used.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Annotated
@@ -30,8 +31,11 @@ router = APIRouter(prefix="/api", tags=["Grammar"])
 
 # ── User-specified instruction ────────────────────────────────────────────────
 GRAMMAR_SYSTEM_PROMPT = (
-    "You are a grammar correction tool. Correct all grammar, spelling, punctuation, "
-    "subject-verb agreement, plural and possessive errors. Preserve meaning. Return ONLY the corrected text."
+    "You are an English grammar correction assistant. "
+    "Correct all grammar, spelling, capitalization, and punctuation errors while preserving the original meaning. "
+    "Return ONLY a valid JSON object with exactly two keys: 'corrected_text' and 'explanation'. "
+    "In 'explanation', briefly describe the changes made. "
+    "If the text is already grammatically correct, return the original text as 'corrected_text' and 'No corrections needed.' as 'explanation'."
 )
 
 
@@ -55,13 +59,10 @@ class GrammarResponse(BaseModel):
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _clean_response(raw: str) -> str:
+def _parse_grammar_response(raw: str, original_text: str) -> tuple[str, str]:
     """
-    Clean the model output.
-
-    1. Extract content after </think> if Qwen3 generated internal reasoning.
-    2. Strip markdown code fences.
-    3. Strip outer wrapping quotes.
+    Parse the model's response into (corrected_text, explanation).
+    Handles reasoning blocks, markdown fences, and JSON payloads with graceful fallbacks.
     """
     text = raw.strip()
 
@@ -71,20 +72,54 @@ def _clean_response(raw: str) -> str:
     else:
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
-    # Strip markdown code blocks
-    if text.startswith("```") and text.endswith("```"):
+    # Strip markdown code blocks (e.g. ```json ... ```)
+    if text.startswith("```"):
         lines = text.splitlines()
         if len(lines) >= 2:
-            text = "\n".join(lines[1:-1]).strip()
+            if lines[-1].strip() == "```":
+                text = "\n".join(lines[1:-1]).strip()
+            else:
+                text = "\n".join(lines[1:]).strip()
 
-    # Strip wrapping quotes
-    if len(text) >= 2 and (
-        (text[0] == '"' and text[-1] == '"') or
-        (text[0] == "'" and text[-1] == "'")
-    ):
-        text = text[1:-1].strip()
+    # Try parsing direct JSON
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict) and "corrected_text" in data:
+            corrected = str(data["corrected_text"]).strip()
+            explanation = str(data.get("explanation", "")).strip()
+            if not explanation:
+                explanation = (
+                    "No corrections needed."
+                    if corrected.lower() == original_text.strip().lower()
+                    else "Corrected grammar, spelling, and punctuation."
+                )
+            return corrected, explanation
+    except Exception:
+        pass
 
-    return text
+    # Regex extraction fallback for JSON fields
+    match_corr = re.search(r'"corrected_text"\s*:\s*"([^"]+)"', text)
+    match_exp = re.search(r'"explanation"\s*:\s*"([^"]+)"', text)
+    if match_corr:
+        corrected = match_corr.group(1).strip()
+        explanation = (
+            match_exp.group(1).strip()
+            if match_exp
+            else ("No corrections needed." if corrected.lower() == original_text.strip().lower() else "Corrected grammar, spelling, and punctuation.")
+        )
+        return corrected, explanation
+
+    # Fallback to plain text if JSON parsing fails
+    if text:
+        cleaned = text.strip().strip('"\'')
+        explanation = (
+            "No corrections needed."
+            if cleaned.lower() == original_text.strip().lower()
+            else "Corrected grammar, spelling, and punctuation."
+        )
+        return cleaned, explanation
+
+    return original_text, "No corrections needed."
 
 
 # ── Dependency ────────────────────────────────────────────────────────────────
@@ -98,7 +133,7 @@ def get_ollama_client() -> OllamaClient:
 @router.post(
     "/grammar",
     response_model=GrammarResponse,
-    summary="Correct text grammar using local Qwen3 4B model",
+    summary="Correct text grammar using local Ollama model",
     responses={
         200: {"description": "Grammar-corrected text returned successfully."},
         503: {"description": "Ollama is not running, unreachable, or timed out."},
@@ -110,13 +145,11 @@ async def post_grammar(
     client: Annotated[OllamaClient, Depends(get_ollama_client)],
 ) -> GrammarResponse:
     """
-    Send text to local Qwen3 4B model for grammar correction.
-    Uses few-shot prompting with temperature=0.0 for 100% deterministic accuracy.
+    Send text to local Ollama model for grammar correction.
+    Uses JSON instruction prompting with temperature=0.0.
     """
     messages = [
         {"role": "system", "content": GRAMMAR_SYSTEM_PROMPT},
-        {"role": "user", "content": "He go to school yesterday."},
-        {"role": "assistant", "content": "He went to school yesterday."},
         {"role": "user", "content": body.text},
     ]
 
@@ -126,7 +159,7 @@ async def post_grammar(
         data = await client.chat(
             messages,
             temperature=0.0,
-            options={"num_predict": 256},
+            options={"num_predict": 1024},
         )
     except OllamaUnavailableError as exc:
         logger.warning("Ollama unavailable (grammar): %s", exc)
@@ -146,15 +179,7 @@ async def post_grammar(
         ) from exc
 
     raw: str = data.get("message", {}).get("content", "").strip()
-    corrected = _clean_response(raw)
-
-    if not corrected:
-        corrected = body.text
-
-    if corrected.lower() == body.text.strip().lower():
-        explanation = "No corrections needed — the text was already grammatically correct."
-    else:
-        explanation = "Corrected grammar, spelling, and punctuation."
+    corrected, explanation = _parse_grammar_response(raw, body.text)
 
     logger.info(
         "grammar response — original_chars=%d corrected_chars=%d",
